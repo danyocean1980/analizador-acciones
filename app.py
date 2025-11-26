@@ -1092,20 +1092,36 @@ if st.button("📊 Calcular análisis de cartera"):
             st.bar_chart(expos_sector)
 
             # Beta y volatilidad aproximada de la parte invertida
-            # (muy simplificado: promedio ponderado)
-            valid_beta = df_cartera.dropna(subset=["Beta"])
+            # (media ponderada, asegurando tipos numéricos)
+            import numpy as np
+
+            # Beta
+            valid_beta = df_cartera.dropna(subset=["Beta", "Peso_%"]).copy()
             if not valid_beta.empty:
-                portfolio_beta = float(
-                    (valid_beta["Peso_%"] * valid_beta["Beta"]).sum() / valid_beta["Peso_%"].sum()
-                )
+                valid_beta["Peso_%"] = pd.to_numeric(valid_beta["Peso_%"], errors="coerce")
+                valid_beta["Beta"] = pd.to_numeric(valid_beta["Beta"], errors="coerce")
+                valid_beta = valid_beta.dropna(subset=["Beta", "Peso_%"])
+                if not valid_beta.empty:
+                    portfolio_beta = float(
+                        np.average(valid_beta["Beta"], weights=valid_beta["Peso_%"])
+                    )
+                else:
+                    portfolio_beta = np.nan
             else:
                 portfolio_beta = np.nan
 
-            valid_vol = df_cartera.dropna(subset=["Vol_1A_%"])
+            # Volatilidad
+            valid_vol = df_cartera.dropna(subset=["Vol_1A_%", "Peso_%"]).copy()
             if not valid_vol.empty:
-                portfolio_vol = float(
-                    (valid_vol["Peso_%"] * valid_vol["Vol_1A_%"]).sum() / valid_vol["Peso_%"].sum()
-                )
+                valid_vol["Peso_%"] = pd.to_numeric(valid_vol["Peso_%"], errors="coerce")
+                valid_vol["Vol_1A_%"] = pd.to_numeric(valid_vol["Vol_1A_%"], errors="coerce")
+                valid_vol = valid_vol.dropna(subset=["Vol_1A_%", "Peso_%"])
+                if not valid_vol.empty:
+                    portfolio_vol = float(
+                        np.average(valid_vol["Vol_1A_%"], weights=valid_vol["Peso_%"])
+                    )
+                else:
+                    portfolio_vol = np.nan
             else:
                 portfolio_vol = np.nan
 
