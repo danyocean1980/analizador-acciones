@@ -1,3 +1,36 @@
+# App
 streamlit
-yfinance
+
+# Datos de mercado
 pandas
+numpy
+python-dateutil
+yfinance
+
+# Modelos / estadística
+scikit-learn
+statsmodels
+scipy
+
+# Gráficos
+matplotlib
+plotly
+seaborn
+
+# Noticias
+requests
+newsapi-python
+finnhub-python
+feedparser
+beautifulsoup4
+lxml
+
+# NLP / sentimiento multilingüe
+transformers
+torch
+nltk
+
+# Informes
+reportlab
+openpyxl
+xlsxwriter
