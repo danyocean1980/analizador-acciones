@@ -18,17 +18,24 @@ st.set_page_config(
 
 # ------------------ FUNCIONES AUXILIARES CÁLCULO ------------------ #
 
-def calcular_rsi(series: pd.Series, window: int = 14) -> pd.Series:
-    """RSI clásico de 14 periodos."""
+def calcular_rsi(series, window: int = 14) -> pd.Series:
+    """
+    RSI clásico de 14 periodos.
+    Aseguramos que la entrada sea una Serie 1D aunque venga como DataFrame/ndarray 2D.
+    """
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+    else:
+        series = pd.Series(series).squeeze()
+
+    series = series.astype(float)
+
     delta = series.diff()
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
 
-    gain = pd.Series(gain, index=series.index)
-    loss = pd.Series(loss, index=series.index)
-
-    avg_gain = gain.rolling(window).mean()
-    avg_loss = loss.rolling(window).mean()
+    avg_gain = gain.rolling(window=window, min_periods=window).mean()
+    avg_loss = loss.rolling(window=window, min_periods=window).mean()
 
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
@@ -37,6 +44,10 @@ def calcular_rsi(series: pd.Series, window: int = 14) -> pd.Series:
 
 def calcular_macd(series: pd.Series):
     """MACD estándar (12, 26, 9)."""
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+    series = pd.Series(series).astype(float)
+
     ema12 = series.ewm(span=12, adjust=False).mean()
     ema26 = series.ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
@@ -47,6 +58,10 @@ def calcular_macd(series: pd.Series):
 
 def calcular_max_drawdown(series: pd.Series) -> float:
     """Máxima caída desde máximos (drawdown) en % negativa."""
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+    series = pd.Series(series)
+
     if series.empty:
         return np.nan
     running_max = series.cummax()
@@ -59,6 +74,10 @@ def calcular_volatilidades_multiperiodo(returns: pd.Series):
     Volatilidad anualizada en diferentes ventanas usando rentabilidades diarias.
     1M ≈ 21 días, 3M ≈ 63 días, 1A ≈ 252 días.
     """
+    if isinstance(returns, pd.DataFrame):
+        returns = returns.iloc[:, 0]
+    returns = pd.Series(returns)
+
     vols = {}
     for label, window in [("1M", 21), ("3M", 63), ("1A", 252)]:
         if len(returns) > window:
@@ -69,11 +88,17 @@ def calcular_volatilidades_multiperiodo(returns: pd.Series):
     return vols
 
 
-def calcular_beta_vs_indice(price_series: pd.Series, ticker_indice: str = "^GSPC", interval: str = "1d") -> float:
+def calcular_beta_vs_indice(price_series, ticker_indice: str = "^GSPC", interval: str = "1d") -> float:
     """
     Calcula la beta de la acción vs un índice (por defecto S&P 500).
     Usa datos del mismo periodo y frecuencia.
     """
+    # Asegurar Serie 1D
+    if isinstance(price_series, pd.DataFrame):
+        price_series = price_series.iloc[:, 0]
+    else:
+        price_series = pd.Series(price_series).squeeze()
+
     try:
         idx_data = yf.download(
             ticker_indice,
@@ -90,7 +115,8 @@ def calcular_beta_vs_indice(price_series: pd.Series, ticker_indice: str = "^GSPC
 
         df = pd.concat([stock_ret, idx_ret], axis=1, join="inner")
         df.columns = ["stock", "index"]
-        if df["index"].var() == 0 or df.dropna().empty:
+        df = df.dropna()
+        if df.empty or df["index"].var() == 0:
             return np.nan
 
         cov = np.cov(df["stock"], df["index"])[0][1]
@@ -750,11 +776,11 @@ else:
                     st.warning(f"No se han encontrado datos para {ticker}.")
                     continue
 
-                # Asegurar que Close es Serie 1D
+                # Asegurar Close como Serie 1D
                 close = data["Close"]
                 if isinstance(close, pd.DataFrame):
                     close = close.iloc[:, 0]
-                data["Close"] = close
+                data["Close"] = pd.Series(close).astype(float)
 
                 # Indicadores de precio
                 data["SMA20"] = data["Close"].rolling(window=20).mean()
@@ -1057,11 +1083,10 @@ if st.button("📊 Calcular análisis de cartera"):
                     progress=False,
                 )
                 if not hist.empty:
-                    # Asegurar Close 1D
                     close_hist = hist["Close"]
                     if isinstance(close_hist, pd.DataFrame):
                         close_hist = close_hist.iloc[:, 0]
-                    hist["Close"] = close_hist
+                    hist["Close"] = pd.Series(close_hist).astype(float)
 
                     rets = hist["Close"].pct_change().dropna()
                     vol1y = rets.std() * np.sqrt(252) * 100
@@ -1100,12 +1125,13 @@ if st.button("📊 Calcular análisis de cartera"):
             # Exposición por sectores
             st.markdown("### 🧩 Exposición por sectores")
             expos_sector = df_cartera.groupby("Sector")["Peso_%"].sum().sort_values(ascending=False)
-            st.dataframe(expos_sector.reset_index().rename(columns={"Peso_%": "Peso_sector_%"}), hide_index=True)
+            st.dataframe(
+                expos_sector.reset_index().rename(columns={"Peso_%": "Peso_sector_%"}),
+                hide_index=True,
+            )
             st.bar_chart(expos_sector)
 
             # Beta y volatilidad aproximada de la parte invertida
-            import numpy as np
-
             valid_beta = df_cartera.dropna(subset=["Beta", "Peso_%"]).copy()
             if not valid_beta.empty:
                 valid_beta["Peso_%"] = pd.to_numeric(valid_beta["Peso_%"], errors="coerce")
