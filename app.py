@@ -278,7 +278,6 @@ def formatear_capitalizacion(market_cap) -> str:
         return f"{market_cap:,.0f}".replace(",", ".")
 
 
-# helpers para tratar números/Series de forma segura
 def to_float_or_nan(x):
     if x is None:
         return np.nan
@@ -303,7 +302,6 @@ def es_numero_valido(x) -> bool:
 
 def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
     """Mini-rating automático muy simplificado para tener una señal rápida."""
-    # asegurar escalares
     price = to_float_or_nan(price)
     sma50 = to_float_or_nan(sma50)
     sma200 = to_float_or_nan(sma200)
@@ -314,7 +312,6 @@ def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
     score = 0
     motivos = []
 
-    # Tendencia
     if es_numero_valido(sma50) and es_numero_valido(sma200):
         if price > sma50 > sma200:
             score += 2
@@ -328,7 +325,6 @@ def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
         else:
             motivos.append("Tendencia poco clara según SMA50 y SMA200.")
 
-    # RSI
     if es_numero_valido(rsi):
         if 40 <= rsi <= 60:
             score += 1
@@ -340,7 +336,6 @@ def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
             score -= 1
             motivos.append(f"RSI en sobrecompra ({rsi:.1f}), posible corrección.")
 
-    # Rentabilidad 3 meses
     if es_numero_valido(ret_3m):
         if ret_3m > 10:
             score += 1
@@ -349,7 +344,6 @@ def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
             score -= 1
             motivos.append(f"Mal comportamiento en 3 meses: {ret_3m:.1f}%.")
 
-    # Volatilidad
     if es_numero_valido(volatility):
         if volatility > 45:
             score -= 1
@@ -375,7 +369,6 @@ def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
 
 
 def map_quick_action(label_rating: str) -> str:
-    """Traduce el rating a una acción rápida: comprar / mantener / evitar."""
     if "Compra potencial" in label_rating:
         return "➡️ Señal rápida: **COMPRAR (para estudiar más / entrada parcial)**."
     if "Interesante pero con cautela" in label_rating:
@@ -405,9 +398,6 @@ def construir_informe_estructurado(
     vols_multiperiodo: dict,
     beta,
 ) -> str:
-    """Informe largo en 8 secciones (tu estructura)."""
-
-    # asegurar escalares
     price = to_float_or_nan(price)
     sma50 = to_float_or_nan(sma50)
     sma200 = to_float_or_nan(sma200)
@@ -453,7 +443,6 @@ def construir_informe_estructurado(
         f"Análisis solicitado para **{nombre} ({ticker})**, sector **{sector}**, industria **{industry}**.\n"
     )
 
-    # 1. Dirección probable
     informe.append("## 1. Dirección probable de la cotización")
     escenario_principal = "base"
     if es_numero_valido(sma50) and es_numero_valido(sma200) and es_numero_valido(price):
@@ -471,11 +460,10 @@ def construir_informe_estructurado(
     informe.append("- **Escenario bajista:** ruptura de soportes, revisiones negativas y deterioro macro/sector.")
     informe.append("- **Riesgos:** cambios en tipos, resultados peores de lo esperado, regulación o problemas de ejecución.")
     informe.append(
-        f"- **Riesgo cuantitativo (ejemplo):** volatilidad anualizada ≈ {to_float_or_nan(volatility):.1f}% "
-        f"y drawdown máximo reciente ≈ {to_float_or_nan(max_dd):.1f}% (negativo)."
+        f"- **Riesgo cuantitativo (ejemplo):** volatilidad anualizada ≈ {volatility:.1f}% "
+        f"y drawdown máximo reciente ≈ {max_dd:.1f}% (negativo)."
     )
 
-    # 2. Fundamentales
     informe.append("## 2. Análisis de fundamentales")
     informe.append(f"- **PER actual (trailing):** {formatear_numero(trailing_pe, 1)}")
     informe.append(f"- **PER futuro (forward):** {formatear_numero(forward_pe, 1)}")
@@ -504,7 +492,6 @@ def construir_informe_estructurado(
         f"\nEn conjunto, sin comparar en detalle con el sector ni con su propio histórico, la acción parece {valoracion_texto}"
     )
 
-    # 3. Noticias
     informe.append("## 3. Noticias recientes")
     tot_news = sum(len(v) for v in noticias_clas.values())
     if tot_news == 0:
@@ -528,7 +515,6 @@ def construir_informe_estructurado(
             "\nEstas noticias afectan al **sentimiento** de corto plazo, especialmente resultados, regulación, fusiones o cambios estratégicos."
         )
 
-    # 4. Consenso + técnico
     informe.append("## 4. Consenso de analistas y análisis técnico")
     informe.append(
         f"- **Recomendación media (numérica):** {formatear_numero(rec_mean, 2)} "
@@ -558,7 +544,6 @@ def construir_informe_estructurado(
         f"- **Riesgo de mercado (beta):** β ≈ {formatear_numero(beta,2)} frente al índice de referencia (aprox. S&P 500)."
     )
 
-    # 5. Opinión general
     informe.append("## 5. Opinión general del mercado")
     informe.append(
         "- El sentimiento viene de la combinación de resultados, noticias, precio relativo vs índices y cambios de recomendación."
@@ -570,7 +555,6 @@ def construir_informe_estructurado(
         "- La lectura final debe adaptarse al perfil de riesgo y horizonte del inversor."
     )
 
-    # 6. EPS
     informe.append("## 6. Evolución del BPA (EPS) últimos 10 años")
     if eps_df is None or eps_df.empty:
         informe.append("- No hay serie larga de EPS disponible en esta fuente; conviene consultar informes anuales.")
@@ -579,7 +563,6 @@ def construir_informe_estructurado(
             "- Se muestra una aproximación de la evolución del EPS. Una tendencia creciente y estable suele respaldar una tesis de largo plazo."
         )
 
-    # 7. Competidores
     informe.append("## 7. Competidores y potencial relativo")
     informe.append(f"- {nombre} compite en el sector **{sector}**, industria **{industry}**.")
     informe.append(
@@ -589,7 +572,6 @@ def construir_informe_estructurado(
         "- La pregunta clave: “¿Por qué prefiero esta empresa frente a su mejor competidor directo?”."
     )
 
-    # 8. Conclusión
     informe.append("## 8. Conclusión")
     informe.append(
         "- **Tesis resumida:** la combinación de crecimiento, calidad de márgenes, solidez del balance y precio pagado determinará el retorno."
@@ -617,7 +599,6 @@ def construir_informe_estructurado(
 # ------------------ CHECKLIST PRO CON EXPLICACIONES ------------------ #
 
 def construir_checklist_pro(nombre: str, ticker: str, sector: str, industry: str) -> str:
-    """Checklist profesional completa, con 'en qué fijarme' en cada punto."""
     return f"""
 ## 📋 Checklist PRO para un análisis muy fiable de **{nombre} ({ticker})**
 
@@ -743,7 +724,7 @@ def generar_pdf_desde_texto(texto: str) -> bytes:
                 c.showPage()
                 y = height - y_margin
             c.drawString(x_margin, y, subline)
-            y -= 14  # separación de línea
+            y -= 14
 
     c.save()
     pdf_value = buffer.getvalue()
@@ -806,21 +787,32 @@ else:
             st.markdown(f"### {ticker}")
 
             try:
-                data = yf.download(
+                raw = yf.download(
                     ticker,
                     period=period,
                     interval=interval,
                     progress=False,
                 )
 
-                if data.empty:
+                if raw.empty:
                     st.warning(f"No se han encontrado datos para {ticker}.")
                     continue
 
-                # Asegurar Close como Serie 1D
-                close = data["Close"]
-                if isinstance(close, pd.DataFrame):
-                    close = close.iloc[:, 0]
+                # ---- Normalizar a DataFrame sencillo con una sola columna Close ----
+                if isinstance(raw.columns, pd.MultiIndex):
+                    # buscar ('Close', ticker) o el primer 'Close'
+                    if ('Close', ticker) in raw.columns:
+                        close = raw[('Close', ticker)]
+                    else:
+                        close_cols = [c for c in raw.columns if c[0] == 'Close']
+                        if not close_cols:
+                            st.error(f"No se ha encontrado columna 'Close' para {ticker}.")
+                            continue
+                        close = raw[close_cols[0]]
+                else:
+                    close = raw["Close"]
+
+                data = pd.DataFrame(index=raw.index)
                 data["Close"] = pd.Series(close).astype(float)
 
                 # Indicadores de precio
@@ -878,7 +870,6 @@ else:
                 sector = info.get("sector") or "N/D"
                 industry = info.get("industry") or "N/D"
 
-                # Construimos informe y checklist (para exportar)
                 informe_md = construir_informe_estructurado(
                     ticker=ticker,
                     info=info,
@@ -901,7 +892,6 @@ else:
                 )
                 pdf_bytes = generar_pdf_desde_texto(markdown_completo)
 
-                # Tabs
                 tab_resumen, tab_grafico, tab_indicadores, tab_informe, tab_checklist = st.tabs(
                     [
                         "📌 Resumen",
@@ -1084,7 +1074,6 @@ if st.button("📊 Calcular análisis de cartera"):
     cash_weight = 0.0
 
     for linea in lineas:
-        # admitir "AAPL, 20" o "AAPL 20"
         if "," in linea:
             partes = [p.strip() for p in linea.split(",")]
         else:
@@ -1117,16 +1106,26 @@ if st.button("📊 Calcular análisis de cartera"):
                 nombre = info.get("longName") or tkr
                 sector = info.get("sector") or "N/D"
 
-                hist = yf.download(
+                raw = yf.download(
                     tkr,
                     period="1y",
                     interval="1d",
                     progress=False,
                 )
-                if not hist.empty:
-                    close_hist = hist["Close"]
-                    if isinstance(close_hist, pd.DataFrame):
-                        close_hist = close_hist.iloc[:, 0]
+                if not raw.empty:
+                    if isinstance(raw.columns, pd.MultiIndex):
+                        if ('Close', tkr) in raw.columns:
+                            close_hist = raw[('Close', tkr)]
+                        else:
+                            close_cols = [c for c in raw.columns if c[0] == 'Close']
+                            if not close_cols:
+                                close_hist = raw.iloc[:, 0]
+                            else:
+                                close_hist = raw[close_cols[0]]
+                    else:
+                        close_hist = raw["Close"]
+
+                    hist = pd.DataFrame(index=raw.index)
                     hist["Close"] = pd.Series(close_hist).astype(float)
 
                     rets = hist["Close"].pct_change().dropna()
@@ -1163,7 +1162,6 @@ if st.button("📊 Calcular análisis de cartera"):
             st.markdown("### 📋 Tabla de posiciones (sin contar la liquidez)")
             st.dataframe(df_cartera, hide_index=True)
 
-            # Exposición por sectores
             st.markdown("### 🧩 Exposición por sectores")
             expos_sector = df_cartera.groupby("Sector")["Peso_%"].sum().sort_values(ascending=False)
             st.dataframe(
@@ -1172,7 +1170,6 @@ if st.button("📊 Calcular análisis de cartera"):
             )
             st.bar_chart(expos_sector)
 
-            # Beta y volatilidad aproximada de la parte invertida
             valid_beta = df_cartera.dropna(subset=["Beta", "Peso_%"]).copy()
             if not valid_beta.empty:
                 valid_beta["Peso_%"] = pd.to_numeric(valid_beta["Peso_%"], errors="coerce")
