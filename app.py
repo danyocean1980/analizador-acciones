@@ -93,7 +93,6 @@ def calcular_beta_vs_indice(price_series, ticker_indice: str = "^GSPC", interval
     Calcula la beta de la acción vs un índice (por defecto S&P 500).
     Usa datos del mismo periodo y frecuencia.
     """
-    # Asegurar Serie 1D
     if isinstance(price_series, pd.DataFrame):
         price_series = price_series.iloc[:, 0]
     else:
@@ -279,15 +278,44 @@ def formatear_capitalizacion(market_cap) -> str:
         return f"{market_cap:,.0f}".replace(",", ".")
 
 
+# helpers para tratar números/Series de forma segura
+def to_float_or_nan(x):
+    if x is None:
+        return np.nan
+    if isinstance(x, (pd.Series, pd.DataFrame, np.ndarray)):
+        arr = np.asarray(x).flatten()
+        if arr.size == 0:
+            return np.nan
+        x = arr[0]
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return np.nan
+    return x
+
+
+def es_numero_valido(x) -> bool:
+    x = to_float_or_nan(x)
+    return not (isinstance(x, float) and np.isnan(x))
+
+
 # ------------------ RATING SIMPLE ------------------ #
 
 def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
     """Mini-rating automático muy simplificado para tener una señal rápida."""
+    # asegurar escalares
+    price = to_float_or_nan(price)
+    sma50 = to_float_or_nan(sma50)
+    sma200 = to_float_or_nan(sma200)
+    rsi = to_float_or_nan(rsi)
+    ret_3m = to_float_or_nan(ret_3m)
+    volatility = to_float_or_nan(volatility)
+
     score = 0
     motivos = []
 
     # Tendencia
-    if not np.isnan(sma50) and not np.isnan(sma200):
+    if es_numero_valido(sma50) and es_numero_valido(sma200):
         if price > sma50 > sma200:
             score += 2
             motivos.append("Tendencia alcista (precio > SMA50 > SMA200).")
@@ -301,7 +329,7 @@ def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
             motivos.append("Tendencia poco clara según SMA50 y SMA200.")
 
     # RSI
-    if not np.isnan(rsi):
+    if es_numero_valido(rsi):
         if 40 <= rsi <= 60:
             score += 1
             motivos.append(f"RSI neutro ({rsi:.1f}), sin sobrecompra/sobreventa extrema.")
@@ -313,7 +341,7 @@ def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
             motivos.append(f"RSI en sobrecompra ({rsi:.1f}), posible corrección.")
 
     # Rentabilidad 3 meses
-    if not np.isnan(ret_3m):
+    if es_numero_valido(ret_3m):
         if ret_3m > 10:
             score += 1
             motivos.append(f"Buen comportamiento en 3 meses: {ret_3m:.1f}%.")
@@ -322,7 +350,7 @@ def generar_rating_simple(price, sma50, sma200, rsi, ret_3m, volatility):
             motivos.append(f"Mal comportamiento en 3 meses: {ret_3m:.1f}%.")
 
     # Volatilidad
-    if not np.isnan(volatility):
+    if es_numero_valido(volatility):
         if volatility > 45:
             score -= 1
             motivos.append(f"Volatilidad muy alta: {volatility:.1f}%.")
@@ -367,17 +395,28 @@ def construir_informe_estructurado(
     datos_analistas: dict,
     noticias_clas: dict,
     eps_df: Optional[pd.DataFrame],
-    price: float,
-    sma50: float,
-    sma200: float,
-    rsi_last: float,
-    ret_3m: float,
-    volatility: float,
-    max_dd: float,
+    price,
+    sma50,
+    sma200,
+    rsi_last,
+    ret_3m,
+    volatility,
+    max_dd,
     vols_multiperiodo: dict,
-    beta: float,
+    beta,
 ) -> str:
     """Informe largo en 8 secciones (tu estructura)."""
+
+    # asegurar escalares
+    price = to_float_or_nan(price)
+    sma50 = to_float_or_nan(sma50)
+    sma200 = to_float_or_nan(sma200)
+    rsi_last = to_float_or_nan(rsi_last)
+    ret_3m = to_float_or_nan(ret_3m)
+    volatility = to_float_or_nan(volatility)
+    max_dd = to_float_or_nan(max_dd)
+    beta = to_float_or_nan(beta)
+
     nombre = info.get("longName") or ticker
     sector = info.get("sector") or "N/D"
     industry = info.get("industry") or "N/D"
@@ -403,8 +442,8 @@ def construir_informe_estructurado(
     rec_mean = datos_analistas.get("recommendation_mean")
 
     ratio_price_pt = None
-    if pt_mean and price:
-        ratio_price_pt = price / pt_mean
+    if es_numero_valido(pt_mean) and es_numero_valido(price):
+        ratio_price_pt = price / to_float_or_nan(pt_mean)
 
     informe = []
 
@@ -417,10 +456,10 @@ def construir_informe_estructurado(
     # 1. Dirección probable
     informe.append("## 1. Dirección probable de la cotización")
     escenario_principal = "base"
-    if sma50 and sma200 and price:
-        if price > sma50 > sma200 and (ret_3m is not None and ret_3m > 0):
+    if es_numero_valido(sma50) and es_numero_valido(sma200) and es_numero_valido(price):
+        if price > sma50 > sma200 and es_numero_valido(ret_3m) and ret_3m > 0:
             escenario_principal = "alcista"
-        elif price < sma50 < sma200 and (ret_3m is not None and ret_3m < 0):
+        elif price < sma50 < sma200 and es_numero_valido(ret_3m) and ret_3m < 0:
             escenario_principal = "bajista"
 
     informe.append(
@@ -432,31 +471,32 @@ def construir_informe_estructurado(
     informe.append("- **Escenario bajista:** ruptura de soportes, revisiones negativas y deterioro macro/sector.")
     informe.append("- **Riesgos:** cambios en tipos, resultados peores de lo esperado, regulación o problemas de ejecución.")
     informe.append(
-        f"- **Riesgo cuantitativo (ejemplo):** volatilidad anualizada ≈ {volatility:.1f}% "
-        f"y drawdown máximo reciente ≈ {max_dd:.1f}% (negativo)."
+        f"- **Riesgo cuantitativo (ejemplo):** volatilidad anualizada ≈ {to_float_or_nan(volatility):.1f}% "
+        f"y drawdown máximo reciente ≈ {to_float_or_nan(max_dd):.1f}% (negativo)."
     )
 
     # 2. Fundamentales
     informe.append("## 2. Análisis de fundamentales")
     informe.append(f"- **PER actual (trailing):** {formatear_numero(trailing_pe, 1)}")
     informe.append(f"- **PER futuro (forward):** {formatear_numero(forward_pe, 1)}")
-    informe.append(f"- **Crec. ingresos (último dato):** {formatear_porcentaje(rev_g) if rev_g else 'N/D'}")
-    informe.append(f"- **Crec. beneficios (último dato):** {formatear_porcentaje(earn_g) if earn_g else 'N/D'}")
-    informe.append(f"- **Margen bruto:** {formatear_porcentaje(gross_m) if gross_m else 'N/D'}")
-    informe.append(f"- **Margen operativo:** {formatear_porcentaje(op_m) if op_m else 'N/D'}")
-    informe.append(f"- **Margen neto:** {formatear_porcentaje(net_m) if net_m else 'N/D'}")
-    informe.append(f"- **ROE:** {formatear_porcentaje(roe) if roe else 'N/D'}")
-    informe.append(f"- **ROA/ROIC aprox.:** {formatear_porcentaje(roic) if roic else 'N/D'}")
+    informe.append(f"- **Crec. ingresos (último dato):** {formatear_porcentaje(rev_g) if es_numero_valido(rev_g) else 'N/D'}")
+    informe.append(f"- **Crec. beneficios (último dato):** {formatear_porcentaje(earn_g) if es_numero_valido(earn_g) else 'N/D'}")
+    informe.append(f"- **Margen bruto:** {formatear_porcentaje(gross_m) if es_numero_valido(gross_m) else 'N/D'}")
+    informe.append(f"- **Margen operativo:** {formatear_porcentaje(op_m) if es_numero_valido(op_m) else 'N/D'}")
+    informe.append(f"- **Margen neto:** {formatear_porcentaje(net_m) if es_numero_valido(net_m) else 'N/D'}")
+    informe.append(f"- **ROE:** {formatear_porcentaje(roe) if es_numero_valido(roe) else 'N/D'}")
+    informe.append(f"- **ROA/ROIC aprox.:** {formatear_porcentaje(roic) if es_numero_valido(roic) else 'N/D'}")
     informe.append(f"- **Deuda total:** {formatear_capitalizacion(debt)}")
     informe.append(f"- **Caja total:** {formatear_capitalizacion(cash)}")
     informe.append(f"- **Free cash flow:** {formatear_capitalizacion(fcf)}")
-    informe.append(f"- **Rentabilidad por dividendo:** {formatear_porcentaje(dy) if dy else 'N/D'}")
+    informe.append(f"- **Rentabilidad por dividendo:** {formatear_porcentaje(dy) if es_numero_valido(dy) else 'N/D'}")
 
     valoracion_texto = "difícil de evaluar solo con un dato"
-    if trailing_pe:
-        if trailing_pe < 15:
+    if es_numero_valido(trailing_pe):
+        pe_val = to_float_or_nan(trailing_pe)
+        if pe_val < 15:
             valoracion_texto = "aparentemente **barata**."
-        elif 15 <= trailing_pe <= 25:
+        elif 15 <= pe_val <= 25:
             valoracion_texto = "en zona de valoración **razonable**."
         else:
             valoracion_texto = "más bien **cara**, probablemente por expectativas de crecimiento o calidad percibida."
@@ -491,17 +531,18 @@ def construir_informe_estructurado(
     # 4. Consenso + técnico
     informe.append("## 4. Consenso de analistas y análisis técnico")
     informe.append(
-        f"- **Recomendación media (numérica):** {formatear_numero(datos_analistas.get('recommendation_mean'), 2)} "
+        f"- **Recomendación media (numérica):** {formatear_numero(rec_mean, 2)} "
         "(≈1 fuerte compra, 5 fuerte venta)."
     )
-    informe.append(f"- **Precio objetivo medio:** {formatear_numero(pt_mean) if pt_mean else 'N/D'}")
+    informe.append(f"- **Precio objetivo medio:** {formatear_numero(pt_mean) if es_numero_valido(pt_mean) else 'N/D'}")
     informe.append(
         f"- **Rango objetivos (bajo-alto):** "
-        f"{formatear_numero(pt_low) if pt_low else 'N/D'} – {formatear_numero(pt_high) if pt_high else 'N/D'}"
+        f"{formatear_numero(pt_low) if es_numero_valido(pt_low) else 'N/D'} – "
+        f"{formatear_numero(pt_high) if es_numero_valido(pt_high) else 'N/D'}"
     )
     informe.append(f"- **Nº analistas aprox.:** {int(num_analysts) if num_analysts else 'N/D'}")
     informe.append(f"- **Precio actual:** {formatear_numero(price)} {info.get('currency') or ''}")
-    if ratio_price_pt:
+    if ratio_price_pt is not None:
         if ratio_price_pt < 0.9:
             informe.append("- Cotiza **por debajo** del precio objetivo medio → consenso ve potencial alcista.")
         elif 0.9 <= ratio_price_pt <= 1.1:
@@ -881,11 +922,11 @@ else:
                             "Precio actual",
                             f"{formatear_numero(current_price)} {info.get('currency', '')}",
                         )
-                        if not np.isnan(sma50):
+                        if es_numero_valido(sma50):
                             st.write(f"SMA 50: {formatear_numero(sma50)}")
-                        if not np.isnan(sma200):
+                        if es_numero_valido(sma200):
                             st.write(f"SMA 200: {formatear_numero(sma200)}")
-                        if not np.isnan(ret_3m):
+                        if es_numero_valido(ret_3m):
                             st.write(f"Rentabilidad aprox. 3 meses: {ret_3m:.1f} %")
 
                     with col2:
@@ -897,13 +938,13 @@ else:
                             f"Capitalización: {formatear_capitalizacion(info.get('marketCap'))}"
                         )
                         pe = info.get("trailingPE")
-                        if pe is not None and not np.isnan(pe):
-                            st.write(f"PER (trailing): {pe:.1f}")
+                        if es_numero_valido(pe):
+                            st.write(f"PER (trailing): {to_float_or_nan(pe):.1f}")
                         else:
                             st.write("PER (trailing): N/D")
                         dy = info.get("dividendYield")
-                        if dy is not None and not np.isnan(dy):
-                            st.write(f"Rentabilidad por dividendo: {dy*100:.2f} %")
+                        if es_numero_valido(dy):
+                            st.write(f"Rentabilidad por dividendo: {to_float_or_nan(dy)*100:.2f} %")
                         else:
                             st.write("Rentabilidad por dividendo: N/D")
 
@@ -946,7 +987,7 @@ else:
                         if show_rsi:
                             st.markdown("**RSI 14**")
                             st.line_chart(clean["RSI14"])
-                            if not np.isnan(rsi_last):
+                            if es_numero_valido(rsi_last):
                                 st.write(f"RSI actual: {rsi_last:.1f}")
                             st.caption("En qué fijarte: RSI < 30 = sobreventa (posibles rebotes); RSI > 70 = sobrecompra.")
 
