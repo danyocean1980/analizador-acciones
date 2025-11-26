@@ -750,6 +750,12 @@ else:
                     st.warning(f"No se han encontrado datos para {ticker}.")
                     continue
 
+                # Asegurar que Close es Serie 1D
+                close = data["Close"]
+                if isinstance(close, pd.DataFrame):
+                    close = close.iloc[:, 0]
+                data["Close"] = close
+
                 # Indicadores de precio
                 data["SMA20"] = data["Close"].rolling(window=20).mean()
                 data["SMA50"] = data["Close"].rolling(window=50).mean()
@@ -1051,6 +1057,12 @@ if st.button("📊 Calcular análisis de cartera"):
                     progress=False,
                 )
                 if not hist.empty:
+                    # Asegurar Close 1D
+                    close_hist = hist["Close"]
+                    if isinstance(close_hist, pd.DataFrame):
+                        close_hist = close_hist.iloc[:, 0]
+                    hist["Close"] = close_hist
+
                     rets = hist["Close"].pct_change().dropna()
                     vol1y = rets.std() * np.sqrt(252) * 100
                     beta_t = calcular_beta_vs_indice(hist["Close"], interval="1d")
@@ -1092,10 +1104,8 @@ if st.button("📊 Calcular análisis de cartera"):
             st.bar_chart(expos_sector)
 
             # Beta y volatilidad aproximada de la parte invertida
-            # (media ponderada, asegurando tipos numéricos)
             import numpy as np
 
-            # Beta
             valid_beta = df_cartera.dropna(subset=["Beta", "Peso_%"]).copy()
             if not valid_beta.empty:
                 valid_beta["Peso_%"] = pd.to_numeric(valid_beta["Peso_%"], errors="coerce")
@@ -1110,7 +1120,6 @@ if st.button("📊 Calcular análisis de cartera"):
             else:
                 portfolio_beta = np.nan
 
-            # Volatilidad
             valid_vol = df_cartera.dropna(subset=["Vol_1A_%", "Peso_%"]).copy()
             if not valid_vol.empty:
                 valid_vol["Peso_%"] = pd.to_numeric(valid_vol["Peso_%"], errors="coerce")
