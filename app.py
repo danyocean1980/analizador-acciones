@@ -7,6 +7,17 @@ import textwrap
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from typing import Optional
+import re
+import urllib.parse
+
+# feedparser es opcional (para noticias externas)
+try:
+    import feedparser
+    HAS_FEEDPARSER = True
+except ImportError:
+    HAS_FEEDPARSER = False
+
+_translator = None  # se usa en translate_to_es
 
 # ------------------ CONFIG GENERAL ------------------ #
 
@@ -19,10 +30,7 @@ st.set_page_config(
 # ------------------ FUNCIONES AUXILIARES CÁLCULO ------------------ #
 
 def calcular_rsi(series, window: int = 14) -> pd.Series:
-    """
-    RSI clásico de 14 periodos.
-    Aseguramos que la entrada sea una Serie 1D aunque venga como DataFrame/ndarray 2D.
-    """
+    """RSI clásico de 14 periodos."""
     if isinstance(series, pd.DataFrame):
         series = series.iloc[:, 0]
     else:
@@ -195,80 +203,273 @@ def obtener_datos_analistas(ticker_obj: yf.Ticker) -> dict:
     return datos
 
 
-# ---------- NOTICIAS + SENTIMIENTO ---------- #
+# ---------- UTILIDADES TEXTO / TRADUCCIÓN / SENTIMIENTO ---------- #
 
-POSITIVE_KEYWORDS = [
-    "beat", "beats", "record", "upgrade", "raises guidance",
-    "strong", "surge", "soars", "profit jumps"
-]
-NEGATIVE_KEYWORDS = [
-    "miss", "misses", "downgrade", "cuts guidance",
-    "weak", "plunge", "falls", "lawsuit", "probe", "regulator"
-]
+def limpiar_texto(txt: str) -> str:
+    txt = re.sub(r"<.*?>", "", str(txt))     # quitar etiquetas HTML
+    txt = txt.replace("\n", " ").strip()
+    return txt
 
 
-def obtener_noticias(ticker_obj: yf.Ticker, max_n: int = 10) -> list:
+def summarize_text_simple(text: str, max_chars: int = 400) -> str:
+    """Resumen muy simple: primeras frases hasta max_chars."""
+    if not text:
+        return ""
+    text = limpiar_texto(text)
+    if len(text) <= max_chars:
+        return text
+    partes = re.split(r"(?<=[.!?]) +", text)
+    resumen = ""
+    for p in partes:
+        p = p.strip()
+        if not p:
+            continue
+        if len(resumen) + len(p) + 1 > max_chars:
+            break
+        resumen += (" " + p) if resumen else p
+    if not resumen:
+        resumen = text[:max_chars]
+    return resumen.strip()
+
+
+def translate_to_es(text: str) -> str:
     """
-    Noticias recientes del ticker (si yfinance las da).
-    Devuelve una lista de diccionarios normalizados:
-    {title, publisher, link}
+    Intenta traducir a español usando googletrans si está instalado.
+    Si falla, devuelve el texto original.
     """
+    if not text:
+        return ""
+    global _translator
+    try:
+        from googletrans import Translator  # type: ignore
+    except ImportError:
+        return text  # sin traducción
 
-    def normalizar_item(item):
-        # admite dict u objeto con atributos
-        if isinstance(item, dict):
-            get = item.get
-        else:
-            def get(k, default=None):
-                return getattr(item, k, default)
-
-        title = (
-            get("title")
-            or get("headline")
-            or get("summary")
-            or get("content")
-            or ""
-        )
-        publisher = (
-            get("publisher")
-            or get("provider")
-            or get("source")
-            or get("publisher_name")
-            or ""
-        )
-        link = get("link") or get("url") or get("news_url") or ""
-
-        return {
-            "title": str(title).strip(),
-            "publisher": str(publisher).strip(),
-            "link": str(link).strip(),
-        }
+    if _translator is None:
+        _translator = Translator()
 
     try:
+        translated = _translator.translate(text, dest="es")
+        return translated.text
+    except Exception:
+        return text
+
+
+POS_WORDS_ES = [
+    "sube", "alza", "gana", "crece", "récord", "mejora", "supera expectativas",
+    "beneficio", "beneficios", "rebote", "impulso", "fortaleza", "positivo", "positiva"
+]
+NEG_WORDS_ES = [
+    "cae", "baja", "pierde", "caída", "derrumbe", "crisis", "demanda", "multa",
+    "fraude", "escándalo", "negativo", "negativa", "recorte", "rebaja", "downgrade",
+    "profit warning", "advertencia de beneficios", "riesgo"
+]
+
+
+def analizar_sentimiento_texto(text: str):
+    """Devuelve (score, label) usando un enfoque muy simple de palabras clave."""
+    texto = text.lower()
+    pos = sum(texto.count(w) for w in POS_WORDS_ES)
+    neg = sum(texto.count(w) for w in NEG_WORDS_ES)
+    total = pos + neg
+    if total == 0:
+        score = 0.0
+    else:
+        score = (pos - neg) / total
+
+    if score > 0.35:
+        label = "positiva"
+    elif score < -0.35:
+        label = "negativa"
+    else:
+        label = "neutral"
+    return score, label
+
+
+# ---------- NOTICIAS: yfinance + Google News RSS ---------- #
+
+def obtener_noticias_yf(ticker_obj: yf.Ticker, max_n: int = 10) -> list:
+    """Noticias que da yfinance, en formato normalizado básico."""
+    try:
         news_raw = ticker_obj.news
-        if not isinstance(news_raw, list) or len(news_raw) == 0:
-            return []
-        normalizadas = [normalizar_item(it) for it in news_raw[:max_n]]
-        return normalizadas
+    except Exception:
+        news_raw = []
+    if not isinstance(news_raw, list):
+        return []
+
+    res = []
+    for n in news_raw[:max_n]:
+        title = n.get("title") or n.get("headline") or n.get("summary") or "Sin título"
+        summary = n.get("summary") or n.get("description") or title
+        link = n.get("link") or n.get("url") or ""
+        publisher = n.get("publisher") or n.get("provider") or ""
+
+        res.append(
+            {
+                "title": limpiar_texto(title),
+                "summary_raw": limpiar_texto(summary),
+                "link": link,
+                "publisher": publisher,
+                "source_type": "yfinance",
+            }
+        )
+    return res
+
+
+def fetch_google_news(query: str, lang: str = "es", region: str = "ES", max_n: int = 10) -> list:
+    """
+    Obtiene noticias desde Google News RSS filtrando por webs financieras.
+    Si no hay feedparser instalado, devuelve lista vacía.
+    """
+    if not HAS_FEEDPARSER:
+        return []
+
+    base = "https://news.google.com/rss/search"
+    params = {
+        "q": query,
+        "hl": "es" if lang == "es" else "en",
+        "gl": region,
+        "ceid": f"{region}:{lang}",
+    }
+    url = f"{base}?{urllib.parse.urlencode(params)}"
+
+    try:
+        feed = feedparser.parse(url)
     except Exception:
         return []
 
+    results = []
+    for entry in feed.entries[:max_n]:
+        title = getattr(entry, "title", "") or "Sin título"
+        summary = getattr(entry, "summary", "") or getattr(entry, "description", "") or title
+        link = getattr(entry, "link", "")
 
-def clasificar_noticias(news_list: list) -> dict:
+        publisher = ""
+        src = getattr(entry, "source", None)
+        if src is not None:
+            publisher = getattr(src, "title", "") or ""
+        if not publisher and link:
+            publisher = urllib.parse.urlparse(link).netloc.replace("www.", "")
+
+        results.append(
+            {
+                "title": limpiar_texto(title),
+                "summary_raw": limpiar_texto(summary),
+                "link": link,
+                "publisher": publisher,
+                "source_type": f"google_{lang}",
+            }
+        )
+    return results
+
+
+def preparar_noticia_es(noticia: dict) -> dict:
     """
-    Clasifica noticias en positivas / negativas / neutras según el titular (muy simplificado).
-    Espera que cada noticia venga normalizada con keys: title, publisher, link.
+    A partir de una noticia base (en inglés o español) genera:
+    - title
+    - summary_es
+    - sentiment_score
+    - sentiment_label
+    """
+    texto = noticia.get("summary_raw") or noticia.get("title") or ""
+    resumen = summarize_text_simple(texto, max_chars=400)
+
+    # Intentamos traducir siempre; si falla, se queda en idioma original
+    resumen_es = translate_to_es(resumen)
+
+    score, label = analizar_sentimiento_texto(resumen_es)
+
+    return {
+        "title": noticia.get("title", "Sin título"),
+        "summary_es": resumen_es,
+        "link": noticia.get("link", ""),
+        "publisher": noticia.get("publisher", ""),
+        "source_type": noticia.get("source_type", "desconocido"),
+        "sentiment_score": score,
+        "sentiment_label": label,
+    }
+
+
+def obtener_noticias(ticker_obj: yf.Ticker, ticker: str, company_name: str, max_n: int = 10) -> list:
+    """
+    Agrega noticias de:
+      - yfinance
+      - Google News en castellano de fuentes de bolsa/finanzas
+      - Google News en inglés de grandes medios financieros
+    y las devuelve ya en castellano + sentimiento.
+    """
+    base_list = obtener_noticias_yf(ticker_obj, max_n=max_n)
+
+    # Fuentes españolas: Rankia, Bolsamanía, Expansión, Cinco Días, Bloomberg Línea, Investing...
+    query_es = (
+        f'"{ticker}" OR "{company_name}" '
+        "(site:rankia.com OR site:bolsamania.com OR site:expansion.com "
+        "OR site:cincodias.elpais.com OR site:bloomberglinea.com OR site:investing.com)"
+    )
+
+    # Fuentes inglesas: Yahoo Finance, Investing, Bloomberg, Reuters, Morningstar Canada...
+    query_en = (
+        f'"{ticker}" OR "{company_name}" '
+        "(site:finance.yahoo.com OR site:investing.com OR site:bloomberg.com "
+        "OR site:reuters.com OR site:morningstar.ca OR site:cnn.com)"
+    )
+
+    ext_es = fetch_google_news(query_es, lang="es", region="ES", max_n=max_n)
+    ext_en = fetch_google_news(query_en, lang="en", region="US", max_n=max_n)
+
+    combined = base_list + ext_es + ext_en
+
+    # Quitar duplicados por link o título
+    seen = set()
+    unique = []
+    for n in combined:
+        key = n.get("link") or n.get("title")
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(preparar_noticia_es(n))
+
+    return unique
+
+
+def clasificar_noticias(news_list: list):
+    """
+    Agrupa noticias por sentimiento y calcula el sentimiento medio global.
+    Devuelve:
+      - dict clasificado
+      - score medio
+      - etiqueta global
+      - emoji
     """
     clasificadas = {"positivas": [], "negativas": [], "neutrales": []}
-    for item in news_list:
-        title = (item.get("title") or "").lower()
-        categoria = "neutrales"
-        if any(word in title for word in POSITIVE_KEYWORDS):
-            categoria = "positivas"
-        elif any(word in title for word in NEGATIVE_KEYWORDS):
-            categoria = "negativas"
-        clasificadas[categoria].append(item)
-    return clasificadas
+    scores = []
+
+    for n in news_list:
+        label = n.get("sentiment_label", "neutral")
+        score = float(n.get("sentiment_score", 0.0))
+        scores.append(score)
+
+        if label == "positiva":
+            clasificadas["positivas"].append(n)
+        elif label == "negativa":
+            clasificadas["negativas"].append(n)
+        else:
+            clasificadas["neutrales"].append(n)
+
+    avg_score = float(np.mean(scores)) if scores else 0.0
+    if avg_score > 0.35:
+        global_label = "positivo"
+        emoji = "🟢"
+    elif avg_score < -0.35:
+        global_label = "negativo"
+        emoji = "🔴"
+    else:
+        global_label = "neutral"
+        emoji = "⚪"
+
+    return clasificadas, avg_score, global_label, emoji
 
 
 def obtener_eps_hist(ticker_obj: yf.Ticker, info: dict) -> Optional[pd.DataFrame]:
@@ -428,6 +629,9 @@ def construir_informe_estructurado(
     info: dict,
     datos_analistas: dict,
     noticias_clas: dict,
+    sent_score_noticias: float,
+    sent_label_noticias: str,
+    sent_emoji_noticias: str,
     eps_df: Optional[pd.DataFrame],
     price,
     sma50,
@@ -541,7 +745,29 @@ def construir_informe_estructurado(
     if tot_news == 0:
         informe.append("- No se han podido obtener noticias recientes en esta fuente.")
     else:
-        informe.append(f"- Se han encontrado **{tot_news} noticias**. Clasificación aproximada:")
+        informe.append(
+            f"- Se han encontrado **{tot_news} noticias** en fuentes como Yahoo Finance, Investing, Rankia, "
+            "Bolsamanía, Expansión, Cinco Días, Bloomberg, Morningstar, etc."
+        )
+        informe.append(
+            f"- **Sentimiento medio de noticias:** {sent_emoji_noticias} {sent_label_noticias} "
+            f"(score {sent_score_noticias:+.2f}, rango -1 a +1)."
+        )
+
+        # Impacto esperado en precio
+        if sent_score_noticias > 0.5:
+            impacto = "Impacto esperado: sesgo **alcista moderado/fuerte** en el corto plazo si no aparecen noticias nuevas."
+        elif sent_score_noticias > 0.2:
+            impacto = "Impacto esperado: ligero sesgo **alcista** en el corto plazo."
+        elif sent_score_noticias < -0.5:
+            impacto = "Impacto esperado: riesgo de **presión bajista relevante** o mayor volatilidad a la baja."
+        elif sent_score_noticias < -0.2:
+            impacto = "Impacto esperado: ligero sesgo **bajista** en el corto plazo."
+        else:
+            impacto = "Impacto esperado: **neutro**; el precio se moverá más por factores técnicos o macro."
+        informe.append(f"- {impacto}")
+
+        informe.append("\n### Resumen de titulares relevantes")
         for categoria, lst in noticias_clas.items():
             if not lst:
                 continue
@@ -552,18 +778,21 @@ def construir_informe_estructurado(
             }[categoria]
             informe.append(f"  - {etiqueta}:")
             for n in lst[:5]:
-                titulo = (n.get("title") or "Sin título").strip()
-                fuente = (n.get("publisher") or "").strip()
-                link = (n.get("link") or "").strip()
-
-                texto_base = titulo
+                titulo = n.get("title") or "Sin título"
+                fuente = n.get("publisher") or ""
+                link = n.get("link") or ""
+                resumen = n.get("summary_es") or ""
+                sc = float(n.get("sentiment_score", 0.0))
+                linea_titulo = f"    - {titulo}"
                 if fuente:
-                    texto_base += f" ({fuente})"
-
+                    linea_titulo += f" ({fuente})"
+                linea_titulo += f" – sentimiento {sc:+.2f}"
+                informe.append(linea_titulo)
+                if resumen:
+                    informe.append(f"      {resumen}")
                 if link:
-                    informe.append(f"    - {texto_base} – {link}")
-                else:
-                    informe.append(f"    - {texto_base}")
+                    informe.append(f"      Enlace: {link}")
+
         informe.append(
             "\nEstas noticias afectan al **sentimiento** de corto plazo, especialmente resultados, regulación, fusiones o cambios estratégicos."
         )
@@ -856,7 +1085,7 @@ else:
                     st.warning(f"No se han encontrado datos para {ticker}.")
                     continue
 
-                # ---- Normalizar a DataFrame sencillo con una sola columna Close ----
+                # Normalizar a DataFrame sencillo con una sola columna Close
                 if isinstance(raw.columns, pd.MultiIndex):
                     if ('Close', ticker) in raw.columns:
                         close = raw[('Close', ticker)]
@@ -913,9 +1142,13 @@ else:
                 # Datos avanzados
                 yt = yf.Ticker(ticker)
                 info = obtener_info_basica(yt)
+                nombre = info.get("longName") or ticker
                 datos_analistas = obtener_datos_analistas(yt)
-                news_list = obtener_noticias(yt)
-                noticias_clas = clasificar_noticias(news_list)
+
+                # Noticias: yfinance + externas, todas en castellano con sentimiento
+                news_list = obtener_noticias(yt, ticker, nombre, max_n=10)
+                noticias_clas, news_sent_score, news_sent_label, news_sent_emoji = clasificar_noticias(news_list)
+
                 eps_df = obtener_eps_hist(yt, info)
 
                 label_rating, color_rating, motivos_rating = generar_rating_simple(
@@ -923,7 +1156,6 @@ else:
                 )
                 quick_action = map_quick_action(label_rating)
 
-                nombre = info.get("longName") or ticker
                 sector = info.get("sector") or "N/D"
                 industry = info.get("industry") or "N/D"
 
@@ -932,6 +1164,9 @@ else:
                     info=info,
                     datos_analistas=datos_analistas,
                     noticias_clas=noticias_clas,
+                    sent_score_noticias=news_sent_score,
+                    sent_label_noticias=news_sent_label,
+                    sent_emoji_noticias=news_sent_emoji,
                     eps_df=eps_df,
                     price=current_price,
                     sma50=sma50,
@@ -1011,6 +1246,11 @@ else:
                         st.caption(
                             "⚠️ Modelo simplificado. No sustituye un análisis profesional "
                             "ni tiene en cuenta tu perfil de riesgo."
+                        )
+                        st.markdown("---")
+                        st.markdown(
+                            f"**Sentimiento medio de noticias:** {news_sent_emoji} "
+                            f"{news_sent_label.capitalize()} (score {news_sent_score:+.2f})."
                         )
 
                 # -------- GRÁFICO -------- #
